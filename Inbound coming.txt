@@ -1,0 +1,172 @@
+with main as (
+   select fs.order_id,
+          hs.shipment_id,
+          fs.created_at + interval 7 hour as add_to_sm_at,
+          hs.orig_hub_id,
+          hs.dest_hub_id,
+          hs.shipment_comments,
+          hs.SHIPMENT_VAN_INBOUND,
+          hs.status
+                    
+    from    (select hs.id as shipment_id,
+                    hs.orig_hub_id,
+                    hs.dest_hub_id,
+                    hse.created_at + interval 7 hour as SHIPMENT_VAN_INBOUND,
+                    hs.comments as shipment_comments,
+                    hs.status,
+                    min(hse.created_at + interval 7 hour) over (partition by hs.id) as first_shipment_van_inbound
+                
+            from hub_prod_gl.shipments hs
+            join hub_prod_gl.shipment_events hse on hse.shipment_id = hs.id and hse.hub_system_id = 'vn' and hse.event = 'SHIPMENT_VAN_INBOUND' and hse.status = 'TRANSIT'
+     
+            where hs.dest_hub_country = 'vn'
+            and hs.dest_hub_id = 15
+            and hs.orig_hub_id in (1251, 337, 333, 479, 482, 1039, 1041, 1037, 485, 1043, 711, 1042, 1035, 1115, 1131, 103766, 1165, 997, 1116, 1064, 1107, 1047, 1081, 1086, 1132, 1106, 598, 1020, 1021, 1019, 594, 602, 1033, 269, 1031, 1029, 1027, 1026, 1130, 1065, 1066, 271, 1063, 1058, 1082, 1067, 1061, 1060, 1059, 1057, 1062, 177, 590, 365, 488, 586, 359, 218, 1052, 1050, 1046, 1048, 1128, 476, 473, 1049, 467, 867, 1051, 1053, 1054, 230, 871, 1055, 470, 1056, 634, 425, 626, 642, 249, 646, 622, 1140, 630, 578, 574, 423, 582, 1036, 1032, 175, 570, 1038, 1034, 1103, 1040, 1017, 1016, 1104, 1105, 658, 654, 247, 1018, 1030, 1089, 1087, 1084, 1022, 1025, 1028, 1023, 1024, 971,
+                                104, 361, 1011, 526, 329, 413, 1252, 42, 243, 1005, 103755, 1007, 1006, 1009, 1008, 729, 161, 1138, 103768, 103767, 1044, 279, 1045, 1083, 606, 610, 103753, 1088, 255, 1216, 26, 443, 103752, 1127, 103751, 1010, 28, 738, 1137, 1012, 1013, 245, 45, 1139, 103758, 251, 1135, 343, 103756, 100, 1134, 1221, 363, 143, 103762, 103897, 1125, 103866, 103830, 103831, 993, 151, 1224, 103774, 341, 357, 103867, 1243, 283, 335, 140, 331, 103828, 285, 103761, 355, 103829, 62, 1176, 1158, 103759, 339, 1223, 103760, 149, 1242, 108, 1253, 449, 558, 1244, 141, 103765, 451, 103764, 445, 103772, 1170, 163, 103771, 421, 1126, 1141, 435, 232, 1187, 1248, 690, 281, 103763, 1208, 220, 1198, 495, 345, 1092, 347, 1255, 103775, 103894, 103827, 499, 103895, 103893,
+                                12, 1226, 1264 , 1265, 1263, 762, 805)
+            and hse.created_at >= curdate() - interval 7 hour - interval 7 day
+            and hs.status = 'Transit'
+            ) hs
+    left join hub_prod_gl.shipment_orders fs on fs.shipment_id = hs.shipment_id and fs.order_country = 'vn' and fs.deleted_at is null
+    where hs.SHIPMENT_VAN_INBOUND = hs.first_shipment_van_inbound     
+    group by fs.order_id, hs.shipment_id
+),
+
+order_infor as (
+    select o.*
+    from
+        (select main.order_id,
+               z.name as dest_zone,
+               coalesce(hz.name,h.name, 'VIET') as dest_hub,
+               hh.name as dest_hub_region,
+               CASE when s.name like '%shopee%' then "Shopee"
+               else "Non_shopee"
+               END AS shipper_group,
+               t.status as last_txn_status,
+               case when tk.type_id = 1 then "DAMAGED"
+                       when tk.type_id = 2 then "MISSING"
+                       when tk.type_id = 3 then "SELF COLLECTION"
+                       when tk.type_id = 4 then "PARCEL EXCEPTION"
+                       when tk.type_id = 5 then "SHIPPER ISSUE"
+                       when tk.type_id = 6 then "PARCEL ON HOLD"
+               end as ticket_type,
+               o.rts,
+               group_concat(distinct otn.name) as order_tags,
+               case when greatest(coalesce(c.goods_amount,0), coalesce(o.insurance,0), coalesce(replace(JSON_EXTRACT(o.shipper_ref_metadata, '$.goods_value'), '"',''),0)) >= 5000000 then 'GTC'
+               else 'Normal'
+               end as goods_type,
+               case 
+                    when hz.hub_id = 1 then 'Outbound - OOZ'
+                    when hz.hub_id = 1229 then 'Outbound - HN'
+                    when hz.name like 'QUB%' then 'Outbound - South'
+                    when hz.name like 'QUT%' then 'Outbound - South'
+                    when hz.name like 'TTH%' then 'Outbound - South'
+                    
+                    when hz.hub_id in (175,218,230,247,249,269,271,423,425,467,470,473,476,570,574,578,582,622,626,630,634,642,646,650,654,658,867,
+                                    871,971,1016,1017,1018,1022,1023,1024,1025,1026,1027,1028,1029,1030,1031,1032,1033,1034,1036,1038,1040,1046,
+                                    1048,1049,1050,1051,1052,1053,1054,1055,1056,1057,1058,1059,1060,1061,1062,1063,1065,1066,1067,1082,1084,1087,
+                                    1089,1103,1104,1105,1128,1130,1140,103920,104124,104374,104375,104376,104451,104452,104599) then 'Outbound - North Local Bus'
+                    when hz.region_name = 'North' then 'Outbound - North Inhouse'
+                    when hz.region_name = 'HN' then 'Outbound - HN DPs' 
+                    else concat('Outbound - ',hz.region_name) end as outbound_route,
+               tk.created_at + interval 7 hour as tk_date,
+               max(tk.created_at + interval 7 hour) over (partition by tk.order_id) as last_tk_date,
+               t.created_at + interval 7 hour as t_date,
+               max(t.created_at + interval 7 hour) over (partition by t.order_id) as last_t_date
+              
+               
+        from main
+        left join orders o on o.id = main.order_id
+        left join cods c on o.cod_id = c.id
+        left join ticketing_prod_gl.tickets tk on o.tracking_id collate utf8_general_ci = tk.tracking_id and tk.country = 'vn' and tk.created_at >= curdate() - interval 7 hour - interval 2 week
+        left join shipper_prod_gl.shippers s on o.shipper_id = s.legacy_id and s.system_id = 'vn' and s.deleted_at is null
+        left join transactions t on o.id = t.order_id and t.type = 'DD' and t.country = 'VN'
+        left join waypoints w on w.id = t.waypoint_id and w.country = 'VN' -- zone info
+        left join addressing_prod_gl.zones z on z.legacy_zone_id = w.routing_zone_id and z.system_id = 'vn'
+        left join sort_prod_gl.hubs hz on hz.system_id = 'vn' and hz.hub_id = z.hub_id
+        left join route_logs rl on t.route_id = rl.id
+        left join sort_prod_gl.hubs h on rl.hub_id = h.hub_id and h.system_id = 'vn'
+        left join sort_prod_gl.regions hh on hh.system_id = 'vn' and coalesce(hz.region_id,h.region_id) = hh.id
+        left join order_tags ot on o.id = ot.order_id
+        left join order_tag_names otn on ot.tag_id = otn.id
+        
+        where o.granular_status  != 'Cancelled'
+        and o.created_at >= curdate() - interval 7 hour - interval 1 month
+        and t.created_at >= curdate() - interval 7 hour - interval 2 week
+        group by tk.created_at,t.created_at, tk.order_id, t.order_id , 1,2, coalesce(hz.name,h.name, 'VIET')
+        ) o
+    
+    where true
+    and o.t_date = o.last_t_date
+    
+    group by o.order_id
+),
+
+hub as (
+    select hss.name as start_hub,
+           hss1.name as end_hub,
+           main.order_id,
+           case
+                when hss.name like 'QUB%' then 'Inbound - South'
+                when hss.name like 'QUT%' then 'Inbound - South'
+                when hss.name like 'TTH%' then 'Inbound - South'
+                when hss.hub_id in (175,218,230,247,249,269,271,423,425,467,470,473,476,570,574,578,582,622,626,630,634,642,646,650,654,658,867,
+                                871,971,1016,1017,1018,1022,1023,1024,1025,1026,1027,1028,1029,1030,1031,1032,1033,1034,1036,1038,1040,1046,
+                                1048,1049,1050,1051,1052,1053,1054,1055,1056,1057,1058,1059,1060,1061,1062,1063,1065,1066,1067,1082,1084,1087,
+                                1089,1103,1104,1105,1128,1130,1140,103920,104124,104374,104375,104376,104451,104452,104599
+                                ) then 'Inbound - North Local Bus'
+                when hss.region_id = 101 then 'Inbound - North Inhouse'
+                else concat('Inbound - ',hss.region_name) end as inbound_route
+            
+    from main
+    left join sort_prod_gl.hubs hss on main.orig_hub_id = hss.hub_id and hss.system_id = 'vn'
+    left join sort_prod_gl.hubs hss1 on main.dest_hub_id = hss1.hub_id and hss1.system_id = 'vn'
+    
+),
+
+
+shipment_events as (
+    select se.*
+    from
+             (select main.order_id,
+                    hse.created_at + interval 7 hour as sm_closed_date,
+                    max(hse.created_at + interval 7 hour) as last_sm_closed_date
+             from main
+             left join hub_prod_gl.shipment_events hse on main.shipment_id = hse.shipment_id and hse.event = 'SHIPMENT_CLOSED') se
+    where se.sm_closed_date = se.last_sm_closed_date
+)
+
+
+select m.order_id,
+       m.shipment_id as shipment_id,
+       m.status as shipment_status,
+       m.shipment_comments,
+       oi.last_txn_status,
+       DATE_FORMAT(m.SHIPMENT_VAN_INBOUND, '%Y-%m-%d %H:%m:%s') as transit_shipment,
+       case
+            when h.inbound_route = 'Inbound - North Local Bus' then date_format(date(m.SHIPMENT_VAN_INBOUND + interval 2 day), '%Y-%m-%d')
+            when h.inbound_route = 'Inbound - North Inhouse' then date_format(date(m.SHIPMENT_VAN_INBOUND), '%Y-%m-%d')
+            when h.inbound_route = 'Inbound - South' and m.orig_hub_id = 762 then date_format(date(m.SHIPMENT_VAN_INBOUND + interval 18 hour ), '%Y-%m-%d')
+            when h.inbound_route = 'Inbound - South' and m.orig_hub_id in (12,805,1226,1264,103265,104202) then date_format(date(m.SHIPMENT_VAN_INBOUND + interval 1 day), '%Y-%m-%d')
+            else date_format(date(m.SHIPMENT_VAN_INBOUND + interval 1 day), '%Y-%m-%d')
+            end as ETA_date,
+       h.start_hub,
+       oi.dest_zone,
+       oi.dest_hub,
+       oi.dest_hub_region,
+       h.end_hub,
+       oi.shipper_group,
+       oi.ticket_type,
+       oi.rts,
+       oi.order_tags,
+       oi.goods_type,
+       h.inbound_route,
+       oi.outbound_route
+      
+      
+       
+from main m
+left join order_infor oi on m.order_id = oi.order_id
+left join hub h on m.order_id = h.order_id
+left join shipment_events se on se.order_id = m.order_id
+group by m.order_id
